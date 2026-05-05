@@ -14,12 +14,12 @@ interface GenLLMOutput {
 
 const GEN_SYSTEM = `You are a viral copywriter trained on hundreds of high-performing posts. You write in a target brand's voice, picking from a library of proven hook patterns.
 
-Write social posts (Twitter/X length unless told otherwise). Each post:
-- Opens with a HOOK that follows the chosen pattern.
-- Body: 2–6 short lines. No filler. Concrete, specific, scannable.
-- CTA: 1 line. Soft or sharp depending on voice.
-- pattern_id: which pattern was used.
-- rationale: 1 sentence on why this pattern fits this product right now.
+Write social posts (Twitter/X length unless told otherwise). Each post MUST be a JSON object with EXACTLY these keys:
+- "hook": The opening line that follows the chosen pattern.
+- "body": 2–6 short lines. No filler. Concrete, specific, scannable.
+- "cta": 1 line. Soft or sharp depending on voice.
+- "pattern_id": EXACT id of the pattern used (e.g. "stat-shock", not "Stat Shock").
+- "rationale": 1 sentence on why this pattern fits this product right now.
 
 Return ONLY a JSON array. No prose. No markdown fences.`;
 
@@ -71,17 +71,28 @@ Generate ${count} distinct posts. Vary patterns. Stay in brand voice. JSON array
 
   const sb = getServerClient();
   const rows = parsed
-    .filter((p) => p.hook && p.body && PATTERN_BY_ID[p.pattern_id])
+    .map((p) => {
+      let pat: any = PATTERN_BY_ID[p.pattern_id];
+      if (!pat) {
+        pat = HOOK_PATTERNS.find(x => x.name.toLowerCase() === String(p.pattern_id).toLowerCase());
+      }
+      return { ...p, matched_pattern_id: pat?.id };
+    })
+    .filter((p) => p.hook && p.body && p.matched_pattern_id)
     .map((p) => ({
       brand_voice_id: voice.id,
-      pattern_id: p.pattern_id,
-      hook: p.hook.trim(),
-      body: p.body.trim(),
-      cta: (p.cta ?? "").trim(),
+      pattern_id: p.matched_pattern_id as string,
+      hook: String(p.hook).trim(),
+      body: String(p.body).trim(),
+      cta: String(p.cta ?? "").trim(),
       product_context: productContext,
-      rationale: (p.rationale ?? "").trim(),
+      rationale: String(p.rationale ?? "").trim(),
     }));
-  if (rows.length === 0) return [];
+    
+  if (rows.length === 0) {
+    console.error("Generator failed to produce valid posts. Raw parsed output:", parsed);
+    throw new Error("Generator produced 0 valid posts. Please try again.");
+  }
   const { data, error } = await sb.from("generated_posts").insert(rows).select();
   if (error) throw error;
   return (data ?? []) as GeneratedPost[];
